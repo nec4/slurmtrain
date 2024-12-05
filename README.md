@@ -17,7 +17,7 @@ is no longer sufficient.
 ### Installation
 
 ```
-git clone 
+git clone https://github.com/nec4/slurmtrain 
 pip install .
 ```
 
