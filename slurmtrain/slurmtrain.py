@@ -165,7 +165,7 @@ def train_submitter(
         time.sleep(wait)
         for job in job_files[1:]:
             res = subprocess.run(
-                ["sbatch", "-w", node, "--dependency", f"{dependency_type}:{res}", job],
+                ["sbatch", "-w", node, f"--dependency={dependency_type}:{res}", job],
                 capture_output=True,
             )
             time.sleep(wait)
