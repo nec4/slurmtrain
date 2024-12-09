@@ -5,6 +5,7 @@ import argparse
 import numpy as np
 from typing import List, Tuple, Union, Optional, Dict
 import math
+import multiprocessing
 
 
 def parse_input():
@@ -23,7 +24,7 @@ def parse_input():
     parser.add_argument(
         "--nodelist",
         type=str,
-        help="node range or list of the form `[x1, x1]`, `[x1-x10]` or a mixture, i,e, `[x1,x2-x10]`. Assumes that node names are of the form `^[a-zA-Z]` + `[0-9]$` (some alphas and then a numeric ending).",
+        help="node range or list of the form `x1, x1`, `x1-x10` or a mixture, i,e, `x1,x2-x10`. Assumes that node names are of the form `^[a-zA-Z]` + `[0-9]$` (some alphas and then a numeric ending). All nodes must share the same basename.",
     )
     parser.add_argument(
         "--dependency-type",
@@ -44,14 +45,33 @@ def parse_input():
     )
     parser.add_argument(
         "--wait",
-        type=int,
+        type=float,
         help="Number of seconds to wait between each successive SLURM job submission",
+        default=3,
+    )
+    parser.add_argument(
+        "--pool-workers",
+        type=int,
+        help="defines the maximum number of nodes that can start dependency trains simultaneously.",
+        default=1,
     )
     parser.add_argument(
         "--reservation",
         type=str,
         help="If specified, all jobs will be submitted to nodes under this reservation",
         default=None,
+    )
+    parser.add_argument(
+        "--stop-on-stderr",
+        help="If set, the train submitter program will exit on ANY nonzero `stderr` from a `subprocess` call",
+        action="store_true",
+        default=False,
+    )
+    parser.add_argument(
+        "--verbose",
+        help="If set, the train submitter program will exit on ANY nonzero `stderr` from a `subprocess` call",
+        action="store_true",
+        default=False,
     )
 
     return parser
@@ -131,8 +151,9 @@ def parse_objlist(
 def train_submitter(
     node: str,
     directories: Union[List[str], str],
-    dependincy_type: str,
+    dependency_type: str,
     wait=3,
+    stop_on_stderr: bool = False,
     verbose: bool = False,
     additional_options: Optional[Dict] = None,
 ):
@@ -151,6 +172,11 @@ def train_submitter(
         `["afterany", "afterok", "afternotok"]`
     wait:
         `int` specifying the time to sleep (in seconds) between each SLURM job submission
+    stop_on_stderr:
+        If `True`, the train is program is stopped and exits on ANY nonzero `stderr` from
+        `subprocess` calls
+    verbose:
+        If `True`, submission information is logged to stdout
     additional_options:
         Additional (flagged) SLURM submission options (e.g., `{"--reservation": "my_reservation"}`). These
         will be passed to the `sbatch` call as `"=".join(key,value)`. These options
@@ -175,35 +201,52 @@ def train_submitter(
         additional_options = ["=".join(k, v) for k, v in additional_options.items()]
 
     for path in paths:
-        job_files = list(path.glob("*.sh"))
+        job_files = sorted(list(path.glob("*.sh")))
         if additional_options is not None:
             cmd = (
-                ["sbatch", "-j", f"{job_files[0].resolve().stem}", "-w", node]
+                [
+                    "sbatch",
+                    "-J",
+                    f"{job_files[0].resolve().stem}",
+                    "-o",
+                    f"{job_files[0].resolve().stem}" + ".out",
+                    "-w",
+                    node,
+                ]
                 + additional_options
                 + [f"{job_files[0]}"]
             )
         else:
             cmd = [
                 "sbatch",
-                "-j",
+                "-J",
                 f"{job_files[0].resolve().stem}",
+                "-o",
+                f"{job_files[0].resolve().stem}" + ".out",
                 "-w",
                 node,
                 f"{job_files[0]}",
             ]
+        if verbose:
+            print(f"Submitting job [{job_files[0].resolve().stem}] on node [{node}]")
+
         res = subprocess.run(cmd, capture_output=True)
         if len(res.stderr) > 0:
             print(res.stderr)
-            exit()
-        res = res.stdout.decode()
+            if stop_on_stderr:
+                exit()
+        res = res.stdout.decode().split()[-1]
+        prev_job = job_files[0].resolve().stem
         time.sleep(wait)
-        for job in job_files[1:]:
+        for idx, job in enumerate(job_files[1:]):
             if additional_options is not None:
                 cmd = (
                     [
                         "sbatch",
-                        "-j",
+                        "-J",
                         job.resolve().stem,
+                        "-o",
+                        job.resolve().stem + ".out",
                         "-w",
                         node,
                         f"--dependency={dependency_type}:{res}",
@@ -214,22 +257,36 @@ def train_submitter(
             else:
                 cmd = [
                     "sbatch",
-                    "-j",
+                    "-J",
                     job.resolve().stem,
+                    "-o",
+                    job.resolve().stem + ".out",
                     "-w",
                     node,
                     f"--dependency={dependency_type}:{res}",
                     job,
                 ]
+            if verbose:
+                print(
+                    f"Submitting job [{job.resolve().stem}] on node [{node}], depending on job [{prev_job}]"
+                )
+
             res = subprocess.run(
                 cmd,
                 capture_output=True,
             )
             if len(res.stderr) > 0:
                 print(res.stderr)
-                exit()
-            res = res.stdout.decode()
+                if stop_on_stderr:
+                    exit()
+            res = res.stdout.decode().split()[-1]
+            prev_job = job.resolve().stem
             time.sleep(wait)
+
+
+def train_submitter_wrapper(input_dict):
+    """Wrapper function for multiprocessing"""
+    train_submitter(**input_dict)
 
 
 def partition_dirs(
@@ -261,7 +318,7 @@ def partition_dirs(
                 ...
             ]
 
-        This output is meant to be passed to `train_submitter
+        This output is meant to be passed to `train_submitter`
     """
 
     assignments = []
@@ -283,6 +340,9 @@ def main():
     parser = parse_input()
 
     opts = parser.parse_args()
+    if opts.verbose:
+        print("Running with options:")
+        print(opts)
 
     final_nodes = parse_objlist(opts.nodelist)
     final_dirs = parse_objlist(
@@ -297,13 +357,21 @@ def main():
     else:
         additional_options = None
 
+    inputs = []
     for a in assignments:
-        train_submitter(
-            *a,
-            opts.dependency_type,
-            wait=opts.wait,
-            additional_options=additional_options,
+        inputs.append(
+            {
+                "node": a[0],
+                "directories": a[1],
+                "dependency_type": opts.dependency_type,
+                "wait": opts.wait,
+                "stop_on_stderr": opts.stop_on_stderr,
+                "verbose": opts.verbose,
+                "additional_options": additional_options,
+            }
         )
+    with multiprocessing.Pool(opts.pool_workers) as p:
+        p.map(train_submitter_wrapper, inputs, 1)
 
 
 if __name__ == "__main__":
