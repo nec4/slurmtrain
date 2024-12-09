@@ -3,7 +3,7 @@ import pathlib
 import time
 import argparse
 import numpy as np
-from typing import List, Tuple, Union
+from typing import List, Tuple, Union, Optional, Dict
 import math
 
 
@@ -46,6 +46,12 @@ def parse_input():
         "--wait",
         type=int,
         help="Number of seconds to wait between each successive SLURM job submission",
+    )
+    parser.add_argument(
+        "--reservation",
+        type=str,
+        help="If specified, all jobs will be submitted to nodes under this reservation",
+        default=None,
     )
 
     return parser
@@ -123,7 +129,12 @@ def parse_objlist(
 
 
 def train_submitter(
-    node: str, directories: Union[List[str], str], dependency_type: str, wait=3
+    node: str,
+    directories: Union[List[str], str],
+    dependincy_type: str,
+    wait=3,
+    verbose: bool = False,
+    additional_options: Optional[Dict] = None,
 ):
     """
     Submits the SLURM dependency train for supplied directories to the specified node
@@ -140,6 +151,10 @@ def train_submitter(
         `["afterany", "afterok", "afternotok"]`
     wait:
         `int` specifying the time to sleep (in seconds) between each SLURM job submission
+    additional_options:
+        Additional (flagged) SLURM submission options (e.g., `{"--reservation": "my_reservation"}`). These
+        will be passed to the `sbatch` call as `"=".join(key,value)`. These options
+        apply to all jobs in the dependency train.
     """
 
     valid_types = ["afterany", "afterok", "afternotok"]
@@ -156,18 +171,64 @@ def train_submitter(
     paths = [pathlib.Path(d) for d in directories]
     assert all([p.is_dir() for p in paths])
 
+    if additional_options is not None:
+        additional_options = ["=".join(k, v) for k, v in additional_options.items()]
+
     for path in paths:
         job_files = list(path.glob("*.sh"))
-        res = subprocess.run(
-            ["sbatch", "-w", node, f"{job_files[0]}"], capture_output=True
-        )
+        if additional_options is not None:
+            cmd = (
+                ["sbatch", "-j", f"{job_files[0].resolve().stem}", "-w", node]
+                + additional_options
+                + [f"{job_files[0]}"]
+            )
+        else:
+            cmd = [
+                "sbatch",
+                "-j",
+                f"{job_files[0].resolve().stem}",
+                "-w",
+                node,
+                f"{job_files[0]}",
+            ]
+        res = subprocess.run(cmd, capture_output=True)
+        if len(res.stderr) > 0:
+            print(res.stderr)
+            exit()
         res = res.stdout.decode()
         time.sleep(wait)
         for job in job_files[1:]:
+            if additional_options is not None:
+                cmd = (
+                    [
+                        "sbatch",
+                        "-j",
+                        job.resolve().stem,
+                        "-w",
+                        node,
+                        f"--dependency={dependency_type}:{res}",
+                    ]
+                    + additional_options
+                    + [job]
+                )
+            else:
+                cmd = [
+                    "sbatch",
+                    "-j",
+                    job.resolve().stem,
+                    "-w",
+                    node,
+                    f"--dependency={dependency_type}:{res}",
+                    job,
+                ]
             res = subprocess.run(
-                ["sbatch", "-w", node, f"--dependency={dependency_type}:{res}", job],
+                cmd,
                 capture_output=True,
             )
+            if len(res.stderr) > 0:
+                print(res.stderr)
+                exit()
+            res = res.stdout.decode()
             time.sleep(wait)
 
 
@@ -210,7 +271,7 @@ def partition_dirs(
             f"Not enough nodes ({len(nodelist)} for {len(dirlist)} and {dirs_per_node} directories per node."
         )
 
-    # zip will automatically terminate at the end of the shortest list
+    # zip will automatically terminate at the end of the shortest list in the zip
     for node, group in zip(nodelist, range(num_groups)):
         dirs = dirlist[group * dirs_per_node : (group + 1) * dirs_per_node]
         assignments.append(tuple([node, dirs]))
@@ -229,8 +290,20 @@ def main():
     )
     assignments = partition_dirs(final_nodes, final_dirs, opts.dirs_per_node)
 
+    # clunky, but for now works - in the future something more streamlined is needed
+    if opts.reservation is not None:
+        additional_options = {}
+        additional_options.update({"--reservation", opts.reservation})
+    else:
+        additional_options = None
+
     for a in assignments:
-        train_submitter(*a, opts.dependency_type, wait=opts.wait)
+        train_submitter(
+            *a,
+            opts.dependency_type,
+            wait=opts.wait,
+            additional_options=additional_options,
+        )
 
 
 if __name__ == "__main__":
