@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from slurmtrain import *
+from slurmtrain.slurmtrain import *
 
 
 ok_objs = [
