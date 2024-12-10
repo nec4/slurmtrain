@@ -380,8 +380,12 @@ def main():
                 "additional_options": additional_options,
             }
         )
-    with multiprocessing.Pool(opts.pool_workers) as p:
-        p.map(train_submitter_wrapper, inputs, 1)
+    if opts.pool_workers == 1:
+        for i in inputs:
+            train_submitter(**i)
+    else:
+        with multiprocessing.Pool(opts.pool_workers) as p:
+            p.map(train_submitter_wrapper, inputs, 1)
 
 
 if __name__ == "__main__":
