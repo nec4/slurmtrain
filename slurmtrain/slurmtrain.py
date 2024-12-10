@@ -56,9 +56,9 @@ def parse_input():
         default=1,
     )
     parser.add_argument(
-        "--reservation",
+        "--additional_options",
         type=str,
-        help="If specified, all jobs will be submitted to nodes under this reservation",
+        help="additional options of the form `flag1,opt1,flag2,opt2,...` for SLURM",
         default=None,
     )
     parser.add_argument(
@@ -69,7 +69,7 @@ def parse_input():
     )
     parser.add_argument(
         "--verbose",
-        help="If set, the train submitter program will exit on ANY nonzero `stderr` from a `subprocess` call",
+        help="Prints submission debugging info to stdout",
         action="store_true",
         default=False,
     )
@@ -167,14 +167,13 @@ def train_submitter(
     directories:
         `Union[List[str], str]` of directories from which job scripts should
         be submitted.
-    dependency_type:
-        `str` specifying the SLURM dependency type. Must be one of
-        `["afterany", "afterok", "afternotok"]`
     wait:
         `int` specifying the time to sleep (in seconds) between each SLURM job submission
     stop_on_stderr:
         If `True`, the train is program is stopped and exits on ANY nonzero `stderr` from
         `subprocess` calls
+    dependency_type:
+        One of `afterany`, `afterok`, or `afternotok`
     verbose:
         If `True`, submission information is logged to stdout
     additional_options:
@@ -182,13 +181,7 @@ def train_submitter(
         will be passed to the `sbatch` call as `"=".join(key,value)`. These options
         apply to all jobs in the dependency train.
     """
-
-    valid_types = ["afterany", "afterok", "afternotok"]
-    if dependency_type not in valid_types:
-        raise RuntimeError(
-            f"'dependency_type' must be one of '{valid_types}', but '{dependency_type}' was given."
-        )
-
+    assert dependency_type in ["afterany", "afterok", "afternotok"]
     assert wait >= 0
 
     if isinstance(directories, str):
@@ -198,7 +191,7 @@ def train_submitter(
     assert all([p.is_dir() for p in paths])
 
     if additional_options is not None:
-        additional_options = ["=".join(k, v) for k, v in additional_options.items()]
+        additional_options = ["=".join([k, v]) for k, v in additional_options.items()]
 
     for path in paths:
         job_files = sorted(list(path.glob("*.sh")))
@@ -207,29 +200,36 @@ def train_submitter(
                 [
                     "sbatch",
                     "-J",
-                    f"{job_files[0].resolve().stem}",
+                    job_files[0].resolve().stem,
                     "-o",
-                    f"{job_files[0].resolve().stem}" + ".out",
+                    str(job_files[0].parents[0])
+                    + "/"
+                    + job_files[0].resolve().stem
+                    + ".out",
                     "-w",
                     node,
                 ]
                 + additional_options
-                + [f"{job_files[0]}"]
+                + [str(job_files[0].resolve())]
             )
         else:
             cmd = [
                 "sbatch",
                 "-J",
-                f"{job_files[0].resolve().stem}",
+                job_files[0].resolve().stem,
                 "-o",
-                f"{job_files[0].resolve().stem}" + ".out",
+                str(job_files[0].parents[0])
+                + "/"
+                + job_files[0].resolve().stem
+                + ".out",
                 "-w",
                 node,
-                f"{job_files[0]}",
+                str(job_files[0].resolve()),
             ]
         if verbose:
-            print(f"Submitting job [{job_files[0].resolve().stem}] on node [{node}]")
-
+            print(
+                f"Submitting job [{job_files[0].resolve().stem}] on node [{node}]: {' '.join(cmd)}"
+            )
         res = subprocess.run(cmd, capture_output=True)
         if len(res.stderr) > 0:
             print(res.stderr)
@@ -246,13 +246,13 @@ def train_submitter(
                         "-J",
                         job.resolve().stem,
                         "-o",
-                        job.resolve().stem + ".out",
+                        str(job.parents[0]) + "/" + job.resolve().stem + ".out",
                         "-w",
                         node,
                         f"--dependency={dependency_type}:{res}",
                     ]
                     + additional_options
-                    + [job]
+                    + [str(job.resolve())]
                 )
             else:
                 cmd = [
@@ -260,15 +260,15 @@ def train_submitter(
                     "-J",
                     job.resolve().stem,
                     "-o",
-                    job.resolve().stem + ".out",
+                    str(job.parents[0]) + "/" + job.resolve().stem + ".out",
                     "-w",
                     node,
                     f"--dependency={dependency_type}:{res}",
-                    job,
+                    str(job.resolve()),
                 ]
             if verbose:
                 print(
-                    f"Submitting job [{job.resolve().stem}] on node [{node}], depending on job [{prev_job}]"
+                    f"Submitting job [{job.resolve().stem}] on node [{node}], depending on job [{prev_job}]: {' '.join(cmd)}"
                 )
 
             res = subprocess.run(
@@ -350,10 +350,20 @@ def main():
     )
     assignments = partition_dirs(final_nodes, final_dirs, opts.dirs_per_node)
 
-    # clunky, but for now works - in the future something more streamlined is needed
-    if opts.reservation is not None:
+    if opts.additional_options is not None:
         additional_options = {}
-        additional_options.update({"--reservation", opts.reservation})
+        flagopts = opts.additional_options.split(",")
+        assert len(flagopts) % 2 == 0
+        flags = [f for f in flagopts[::2]]
+        fopts = [o for o in flagopts[1::2]]
+        assert len(flags) == len(fopts)
+        for f, o in zip(flags, fopts):
+            if len(f) > 1:
+                pre = "--"
+            else:
+                pre = "-"
+            additional_options.update({pre + f: o})
+
     else:
         additional_options = None
 
