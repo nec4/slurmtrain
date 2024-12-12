@@ -6,6 +6,7 @@ import numpy as np
 from typing import List, Tuple, Union, Optional, Dict
 import math
 import multiprocessing
+import os
 
 
 def parse_input():
@@ -193,8 +194,14 @@ def train_submitter(
     if additional_options is not None:
         additional_options = ["=".join([k, v]) for k, v in additional_options.items()]
 
+    print(node)
+    print(directories)
+    print(paths)
+
+    # original_dir = os.getcwd()
     for path in paths:
         job_files = sorted(list(path.glob("*.sh")))
+        # os.chdir(str(path.resolve()))
         if additional_options is not None:
             cmd = (
                 [
@@ -239,6 +246,7 @@ def train_submitter(
         prev_job = job_files[0].resolve().stem
         time.sleep(wait)
         for idx, job in enumerate(job_files[1:]):
+            print(f"attempting job dep with file {job}...")
             if additional_options is not None:
                 cmd = (
                     [
@@ -266,6 +274,7 @@ def train_submitter(
                     f"--dependency={dependency_type}:{res}",
                     str(job.resolve()),
                 ]
+            print(f"cmd: {cmd}")
             if verbose:
                 print(
                     f"Submitting job [{job.resolve().stem}] on node [{node}], depending on job [{prev_job}]: {' '.join(cmd)}"
@@ -282,6 +291,7 @@ def train_submitter(
             res = res.stdout.decode().split()[-1]
             prev_job = job.resolve().stem
             time.sleep(wait)
+        # os.chdir(original_dir)
 
 
 def train_submitter_wrapper(input_dict):
@@ -320,10 +330,6 @@ def partition_dirs(
 
         This output is meant to be passed to `train_submitter`
     """
-    print(f"len(dirlist0={len(dirlist)}")
-    print(f"len(nodelist)={len(nodelist)}")
-    print(nodelist)
-    print(dirlist)
     assignments = []
     num_groups = math.ceil(len(dirlist) / dirs_per_node)
     if num_groups > len(nodelist):
