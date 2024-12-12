@@ -56,7 +56,7 @@ def parse_input():
         default=1,
     )
     parser.add_argument(
-        "--additional_options",
+        "--additional-options",
         type=str,
         help="additional options of the form `flag1,opt1,flag2,opt2,...` for SLURM",
         default=None,
