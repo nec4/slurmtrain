@@ -51,12 +51,6 @@ def parse_input():
         default=3,
     )
     parser.add_argument(
-        "--pool-workers",
-        type=int,
-        help="defines the maximum number of nodes that can start dependency trains simultaneously.",
-        default=1,
-    )
-    parser.add_argument(
         "--additional-options",
         type=str,
         help="additional options of the form `flag1,opt1,flag2,opt2,...` for SLURM",
@@ -194,10 +188,6 @@ def train_submitter(
     if additional_options is not None:
         additional_options = ["=".join([k, v]) for k, v in additional_options.items()]
 
-    print(node)
-    print(directories)
-    print(paths)
-
     # original_dir = os.getcwd()
     for path in paths:
         job_files = sorted(list(path.glob("*.sh")))
@@ -246,7 +236,6 @@ def train_submitter(
         prev_job = job_files[0].resolve().stem
         time.sleep(wait)
         for idx, job in enumerate(job_files[1:]):
-            print(f"attempting job dep with file {job}...")
             if additional_options is not None:
                 cmd = (
                     [
@@ -274,7 +263,6 @@ def train_submitter(
                     f"--dependency={dependency_type}:{res}",
                     str(job.resolve()),
                 ]
-            print(f"cmd: {cmd}")
             if verbose:
                 print(
                     f"Submitting job [{job.resolve().stem}] on node [{node}], depending on job [{prev_job}]: {' '.join(cmd)}"
@@ -389,12 +377,8 @@ def main():
                 "additional_options": additional_options,
             }
         )
-    if opts.pool_workers == 1:
-        for i in inputs:
-            train_submitter(**i)
-    else:
-        with multiprocessing.Pool(opts.pool_workers) as p:
-            p.map(train_submitter_wrapper, inputs, 1)
+    for i in inputs:
+        train_submitter(**i)
 
 
 if __name__ == "__main__":
