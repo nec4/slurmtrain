@@ -75,7 +75,7 @@ def parse_input():
         default=1,
     )
     parser.add_argument(
-        "--max_num_jobs",
+        "--max-num-jobs",
         help="Maximum number of jobs that can exist in `squeue`",
         type=int,
         default=1,
@@ -507,7 +507,8 @@ def main():
         print("Running with options:")
         print(opts)
 
-    final_nodes = parse_objlist(opts.nodelist)
+    if opts.nodelist is not None:
+        final_nodes = parse_objlist(opts.nodelist)
     final_dirs = parse_objlist(
         opts.dirlist, assert_base_name_same=False, assert_fixed_len=False
     )
