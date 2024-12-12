@@ -220,7 +220,6 @@ def partition_submitter(
     assert all([p.is_dir() for p in paths])
 
     if additional_options is not None:
-        print(additional_options)
         additional_options = ["=".join([k, v]) for k, v in additional_options.items()]
 
     for path in paths:
@@ -567,7 +566,7 @@ def main():
             wait=opts.wait,
             stop_on_stderr=opts.stop_on_stderr,
             verbose=opts.verbose,
-            additional_options=opts.additional_options,
+            additional_options=additional_options,
             jobs_per_node=opts.jobs_per_node,
             num_avail_nodes=opts.num_avail_nodes,
             max_num=opts.max_num_jobs,
