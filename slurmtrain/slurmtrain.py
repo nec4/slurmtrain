@@ -229,8 +229,8 @@ def partition_submitter(
             train_subsets = np.array_split(node_subset, jobs_per_node)
             for job_files in train_subsets:
                 print(job_files)
-                if not isinstance(job_files, list):
-                    job_files = [job_files]
+                if not isinstance(job_files, np.ndarray):
+                    job_files = np.array([job_files])
                 if additional_options is not None:
                     cmd = (
                         [
