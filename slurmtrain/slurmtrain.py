@@ -220,6 +220,7 @@ def partition_submitter(
     assert all([p.is_dir() for p in paths])
 
     if additional_options is not None:
+        print(additional_options)
         additional_options = ["=".join([k, v]) for k, v in additional_options.items()]
 
     for path in paths:
@@ -228,7 +229,6 @@ def partition_submitter(
         for node_subset in node_subsets:
             train_subsets = np.array_split(node_subset, jobs_per_node)
             for job_files in train_subsets:
-                print(job_files)
                 if not isinstance(job_files, np.ndarray):
                     job_files = np.array([job_files])
                 if additional_options is not None:
