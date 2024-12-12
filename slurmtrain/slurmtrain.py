@@ -229,8 +229,6 @@ def partition_submitter(
                         + "/"
                         + job_files[0].resolve().stem
                         + ".out",
-                        "-w",
-                        node,
                     ]
                     + additional_options
                     + [str(job_files[0].resolve())]
@@ -245,8 +243,6 @@ def partition_submitter(
                     + "/"
                     + job_files[0].resolve().stem
                     + ".out",
-                    "-w",
-                    node,
                     str(job_files[0].resolve()),
                 ]
             if verbose:
@@ -271,8 +267,6 @@ def partition_submitter(
                             job.resolve().stem,
                             "-o",
                             str(job.parents[0]) + "/" + job.resolve().stem + ".out",
-                            "-w",
-                            node,
                             f"--dependency={dependency_type}:{res}",
                         ]
                         + additional_options
@@ -285,8 +279,6 @@ def partition_submitter(
                         job.resolve().stem,
                         "-o",
                         str(job.parents[0]) + "/" + job.resolve().stem + ".out",
-                        "-w",
-                        node,
                         f"--dependency={dependency_type}:{res}",
                         str(job.resolve()),
                     ]
