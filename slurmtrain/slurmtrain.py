@@ -246,6 +246,7 @@ def partition_submitter(
                         + additional_options
                         + [str(job_files[0].resolve())]
                     )
+                print(job_files[0])
                 else:
                     cmd = [
                         "sbatch",
