@@ -68,7 +68,18 @@ def parse_input():
         action="store_true",
         default=False,
     )
-
+    parser.add_argument(
+        "--jobs-per-node",
+        help="Maximum number of jobs to send to a node when --nodelist is not used",
+        type=int,
+        default=1,
+    )
+    parser.add_argument(
+        "--max_num_jobs",
+        help="Maximum number of jobs that can exist in `squeue`",
+        type=int,
+        default=1,
+    )
     return parser
 
 
@@ -141,6 +152,161 @@ def parse_objlist(
 
     # enforce uniqueness
     return np.unique(final_objs).tolist()
+
+
+def check_max_jobs(userid: str, max_num: int) -> bool:
+    """Checks to see if the max number of pending + running jobs is not exceeded"""
+    output = subprocess.run(["squeue", "-u", userid], capture_output=True)
+    if len(output.stderr) > 0:
+        print(output.stderr)
+        exit(1)
+    num_jobs = len(output.stdout.decode().split("\n")[1:])
+    return num_jobs < max_num
+
+
+def check_until_free(userid: str, max_num) -> None:
+    while check_max_jobs(userid, max_num) == False:
+        print("Oops, waiting for more space...")
+
+
+def partition_submitter(
+    userid: str,
+    directories: Union[List[str], str],
+    dependency_type: str,
+    wait=3,
+    stop_on_stderr: bool = False,
+    verbose: bool = False,
+    additional_options: Optional[Dict] = None,
+    jobs_per_node=1,
+    max_num=999,
+):
+    """
+    Submits the SLURM dependency train for supplied directories to the specified nodepool until all nodes are used
+
+    Parameters
+    ----------
+    directories:
+        `Union[List[str], str]` of directories from which job scripts should
+        be submitted.
+    wait:
+        `int` specifying the time to sleep (in seconds) between each SLURM job submission
+    stop_on_stderr:
+        If `True`, the train is program is stopped and exits on ANY nonzero `stderr` from
+        `subprocess` calls
+    dependency_type:
+        One of `afterany`, `afterok`, or `afternotok`
+    verbose:
+        If `True`, submission information is logged to stdout
+    additional_options:
+        Additional (flagged) SLURM submission options (e.g., `{"--reservation": "my_reservation"}`). These
+        will be passed to the `sbatch` call as `"=".join(key,value)`. These options
+        apply to all jobs in the dependency train.
+    """
+    assert dependency_type in ["afterany", "afterok", "afternotok"]
+    assert wait >= 0
+
+    if isinstance(directories, str):
+        directories = [directories]
+
+    paths = [pathlib.Path(d) for d in directories]
+    assert all([p.is_dir() for p in paths])
+
+    if additional_options is not None:
+        additional_options = ["=".join([k, v]) for k, v in additional_options.items()]
+
+    for path in paths:
+        all_job_files = np.array(sorted(list(path.glob("*.sh"))))
+        subsets = np.array_split(all_job_files, jobs_per_node)
+        for job_files in subsets:
+            if additional_options is not None:
+                cmd = (
+                    [
+                        "sbatch",
+                        "-J",
+                        job_files[0].resolve().stem,
+                        "-o",
+                        str(job_files[0].parents[0])
+                        + "/"
+                        + job_files[0].resolve().stem
+                        + ".out",
+                        "-w",
+                        node,
+                    ]
+                    + additional_options
+                    + [str(job_files[0].resolve())]
+                )
+            else:
+                cmd = [
+                    "sbatch",
+                    "-J",
+                    job_files[0].resolve().stem,
+                    "-o",
+                    str(job_files[0].parents[0])
+                    + "/"
+                    + job_files[0].resolve().stem
+                    + ".out",
+                    "-w",
+                    node,
+                    str(job_files[0].resolve()),
+                ]
+            if verbose:
+                print(
+                    f"Submitting job [{job_files[0].resolve().stem}] on node [{node}]: {' '.join(cmd)}"
+                )
+            check_until_free(userid, max_num)
+            res = subprocess.run(cmd, capture_output=True)
+            if len(res.stderr) > 0:
+                print(res.stderr)
+                if stop_on_stderr:
+                    exit()
+            res = res.stdout.decode().split()[-1]
+            prev_job = job_files[0].resolve().stem
+            time.sleep(wait)
+            for idx, job in enumerate(job_files[1:]):
+                if additional_options is not None:
+                    cmd = (
+                        [
+                            "sbatch",
+                            "-J",
+                            job.resolve().stem,
+                            "-o",
+                            str(job.parents[0]) + "/" + job.resolve().stem + ".out",
+                            "-w",
+                            node,
+                            f"--dependency={dependency_type}:{res}",
+                        ]
+                        + additional_options
+                        + [str(job.resolve())]
+                    )
+                else:
+                    cmd = [
+                        "sbatch",
+                        "-J",
+                        job.resolve().stem,
+                        "-o",
+                        str(job.parents[0]) + "/" + job.resolve().stem + ".out",
+                        "-w",
+                        node,
+                        f"--dependency={dependency_type}:{res}",
+                        str(job.resolve()),
+                    ]
+                if verbose:
+                    print(
+                        f"Submitting job [{job.resolve().stem}] on node [{node}], depending on job [{prev_job}]: {' '.join(cmd)}"
+                    )
+
+                check_until_free(userid, max_num)
+                res = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                )
+                if len(res.stderr) > 0:
+                    print(res.stderr)
+                    if stop_on_stderr:
+                        exit()
+                res = res.stdout.decode().split()[-1]
+                prev_job = job.resolve().stem
+                time.sleep(wait)
 
 
 def train_submitter(
@@ -345,7 +511,6 @@ def main():
     final_dirs = parse_objlist(
         opts.dirlist, assert_base_name_same=False, assert_fixed_len=False
     )
-    assignments = partition_dirs(final_nodes, final_dirs, opts.dirs_per_node)
 
     if opts.additional_options is not None:
         additional_options = {}
@@ -364,21 +529,38 @@ def main():
     else:
         additional_options = None
 
-    inputs = []
-    for a in assignments:
-        inputs.append(
-            {
-                "node": a[0],
-                "directories": a[1],
-                "dependency_type": opts.dependency_type,
-                "wait": opts.wait,
-                "stop_on_stderr": opts.stop_on_stderr,
-                "verbose": opts.verbose,
-                "additional_options": additional_options,
-            }
+    if opts.nodelist != None:
+        assignments = partition_dirs(final_nodes, final_dirs, opts.dirs_per_node)
+        inputs = []
+        for a in assignments:
+            inputs.append(
+                {
+                    "node": a[0],
+                    "directories": a[1],
+                    "dependency_type": opts.dependency_type,
+                    "wait": opts.wait,
+                    "stop_on_stderr": opts.stop_on_stderr,
+                    "verbose": opts.verbose,
+                    "additional_options": additional_options,
+                }
+            )
+        for i in inputs:
+            train_submitter(**i)
+
+    else:
+        userid = subprocess.run(["whoami"], capture_output=True)
+        userid = userid.stdout.decode().strip()
+        partition_submitter(
+            userid=userid,
+            directories=final_dirs,
+            dependency_type=opts.dependency_type,
+            wait=opts.wait,
+            stop_on_stderr=opts.stop_on_stderr,
+            verbose=opts.verbose,
+            additional_options=opts.additional_options,
+            jobs_per_node=opts.jobs_per_node,
+            max_num=opts.max_num_jobs,
         )
-    for i in inputs:
-        train_submitter(**i)
 
 
 if __name__ == "__main__":
