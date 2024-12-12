@@ -247,7 +247,7 @@ def partition_submitter(
                 ]
             if verbose:
                 print(
-                    f"Submitting job [{job_files[0].resolve().stem}] on node [{node}]: {' '.join(cmd)}"
+                    f"Submitting job [{job_files[0].resolve().stem}]: {' '.join(cmd)}"
                 )
             check_until_free(userid, max_num)
             res = subprocess.run(cmd, capture_output=True)
@@ -284,7 +284,7 @@ def partition_submitter(
                     ]
                 if verbose:
                     print(
-                        f"Submitting job [{job.resolve().stem}] on node [{node}], depending on job [{prev_job}]: {' '.join(cmd)}"
+                        f"Submitting job [{job.resolve().stem}], depending on job [{prev_job}]: {' '.join(cmd)}"
                     )
 
                 check_until_free(userid, max_num)
