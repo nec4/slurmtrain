@@ -228,6 +228,7 @@ def partition_submitter(
         for node_subset in node_subsets:
             train_subsets = np.array_split(node_subset, jobs_per_node)
             for job_files in train_subsets:
+                print(job_files)
                 if not isinstance(job_files, list):
                     job_files = [job_files]
                 if additional_options is not None:
@@ -365,7 +366,6 @@ def train_submitter(
     # original_dir = os.getcwd()
     for path in paths:
         job_files = sorted(list(path.glob("*.sh")))
-        # os.chdir(str(path.resolve()))
         if additional_options is not None:
             cmd = (
                 [
