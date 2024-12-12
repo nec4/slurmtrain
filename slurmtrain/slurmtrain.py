@@ -320,7 +320,10 @@ def partition_dirs(
 
         This output is meant to be passed to `train_submitter`
     """
-
+    print(f"len(dirlist0={len(dirlist)}")
+    print(f"len(nodelist)={len(nodelist)}")
+    print(nodelist)
+    print(dirlist)
     assignments = []
     num_groups = math.ceil(len(dirlist) / dirs_per_node)
     if num_groups > len(nodelist):
