@@ -72,23 +72,3 @@ def test_parse_objlist(obj, out):
 def test_parse_objlist_raises(obj, expected_error):
     with pytest.raises(expected_error):
         parse_objlist(obj)
-
-
-@pytest.mark.parametrize(
-    "nodes, dirs, dirs_per_node, expected_assignments",
-    [
-        (nodes, dirs, dpns[0], expected_assignments[0]),
-        (nodes, dirs, dpns[1], expected_assignments[1]),
-        (nodes, dirs, dpns[2], expected_assignments[2]),
-    ],
-)
-def test_assignments(nodes, dirs, dirs_per_node, expected_assignments):
-    assignments = partition_dirs(nodes, dirs, dirs_per_node)
-    assert len(assignments) == len(expected_assignments)
-    for a, ea in zip(assignments, expected_assignments):
-        assert a == ea
-
-
-def test_partition_raises():
-    with pytest.raises(RuntimeError):
-        partition_dirs(nodes[:2], dirs, 1)

@@ -262,6 +262,7 @@ def partition_submitter(
                     print(
                         f"Submitting job [{job_files[0].resolve().stem}]: {' '.join(cmd)}"
                     )
+
                 check_until_free(userid, max_num)
                 res = subprocess.run(cmd, capture_output=True)
                 if len(res.stderr) > 0:
@@ -362,11 +363,8 @@ def train_submitter(
     assert dependency_type in ["afterany", "afterok", "afternotok"]
     assert wait >= 0
 
-    if isinstance(directories, str):
-        directories = [directories]
-
     for filelist in filelists:
-        assert all([p.is_file() for p in fileslist])
+        assert all([p.is_file() for p in filelist])
 
     if additional_options is not None:
         additional_options = ["=".join([k, v]) for k, v in additional_options.items()]
@@ -468,63 +466,20 @@ def train_submitter(
                 time.sleep(wait)
 
 
-def partition_dirs(
-    nodelist: List[str],
-    dirlist: List[str],
-    dirs_per_node: int,
-    expand_dirs: bool = False,
-) -> List[Tuple[str, List[str]]]:
+def equipartition_files(nodelist: List[str], dirlist: List[str]):
+    """Equally scatters all SBATCH submission files found in every dir in dirlist
+    over the provided nodelist
     """
-    Assigns sets of directories to nodes for dependency trains, depending on
-    the chosen number of directories per node. Nodes are filled sequentially
-    until all directories are assigned
+    all_files = []
+    for d in dirlist:
+        path = pathlib.Path(d)
+        files = sorted(list(path.glob("*.sh")))
+        all_files.extend(files)
 
-    Parameters
-    ----------
-    nodelist:
-        `List[str]` of node names
-    dirlist:
-        `List[str]` of directories
-    dirs_per_node:
-        `int` specifying the maximum number of directories assigned to a node
-    expand_dirs:
-        if `True`, a single filelist will be returned instead of a list of directories
-
-    Returns
-    -------
-    assignments:
-        `List[Tuple[str,List[str]]]` of assignemts of the form (eg with
-        dirs_per_node=2):
-
-            [
-                ("nodeX", ["dir1", "dir2", ...]),
-                ("nodeY", ["dir3", "dir4", ...]),
-                ...
-            ]
-
-        This output is meant to be passed to `train_submitter`. If `expand_dirs` is `True`,
-        each node will be returned with a single list of all files across the directories
-    """
-    assignments = []
-    num_groups = math.ceil(len(dirlist) / dirs_per_node)
-    if num_groups > len(nodelist):
-        raise RuntimeError(
-            f"Not enough nodes ({len(nodelist)} for {len(dirlist)} and {dirs_per_node} directories per node."
-        )
-
-    # zip will automatically terminate at the end of the shortest list in the zip
-    for node, group in zip(nodelist, range(num_groups)):
-        dirs = dirlist[group * dirs_per_node : (group + 1) * dirs_per_node]
-        assignments.append(tuple([node, dirs]))
-
-    if expand_dirs:
-        for idx, a in enumerate(assignments):
-            node, dirs = a
-            filelist = []
-            for d in dirs:
-                filelist.append(sorted(list(pathlib.Path(d).glob(".sh"))))
-            assignments[idx] = tuple([node, filelist])
-    return assignments
+    num_nodes = len(nodelist)
+    filesets = list(np.array_split(all_files, num_nodes))
+    assert len(filesets) == len(nodelist)
+    return nodelist, filesets
 
 
 def main():
@@ -561,15 +516,7 @@ def main():
         additional_options = None
 
     if opts.nodelist != None:
-        assignments = partition_dirs(
-            final_nodes, final_dirs, opts.dirs_per_node, expand_dirs=True
-        )
-        nodes = []
-        filelists = []
-        for a in assignments:
-            nodes.append(a[0])
-            filelists.append(a[1])
-
+        nodes, filelists = equipartition_files(final_nodes, final_dirs)
         train_submitter(
             userid=userid,
             nodes=nodes,
