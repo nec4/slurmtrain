@@ -34,12 +34,6 @@ def parse_input():
         default="afterany",
     )
     parser.add_argument(
-        "--dirs-per-node",
-        type=int,
-        help="Number of dependency trains/directories per node",
-        default=1,
-    )
-    parser.add_argument(
         "--dirlist",
         type=str,
         help="Directories of jobscripts from which each node in `nodelist` will build dependency trains from, in the same order as the nodes given by `nodelist`. The number of directories must be equal to or less than `(len(nodelist) * dirs_per_node)`. Directories are specified in the same format as in `--nodelist`",
