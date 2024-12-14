@@ -319,24 +319,28 @@ def partition_submitter(
 
 
 def train_submitter(
-    node: str,
-    directories: Union[List[str], str],
+    userid: str,
+    nodes: List[str],
+    filelists: List[pathlib.Path],
     dependency_type: str,
     wait=3,
     stop_on_stderr: bool = False,
     verbose: bool = False,
     additional_options: Optional[Dict] = None,
+    n_jobs_per_node: int = 3,
+    max_num: int = 999,
 ):
     """
     Submits the SLURM dependency train for supplied directories to the specified node
 
     Parameters
     ----------
-    node:
-        `str` ID of the compute node
-    directories:
-        `Union[List[str], str]` of directories from which job scripts should
-        be submitted.
+    userid:
+        `str` of the user ID
+    nodes:
+        `str` ID of the compute nodes
+    filelists:
+        `Union[pathlib.Path]` of job files to submit
     wait:
         `int` specifying the time to sleep (in seconds) between each SLURM job submission
     stop_on_stderr:
@@ -350,6 +354,10 @@ def train_submitter(
         Additional (flagged) SLURM submission options (e.g., `{"--reservation": "my_reservation"}`). These
         will be passed to the `sbatch` call as `"=".join(key,value)`. These options
         apply to all jobs in the dependency train.
+    jobs_per_node:
+        `int` restricting how many jobs can exist in a node simultaneously
+    max_num:
+        `int` maximum number of running/pending jobs
     """
     assert dependency_type in ["afterany", "afterok", "afternotok"]
     assert wait >= 0
@@ -357,18 +365,37 @@ def train_submitter(
     if isinstance(directories, str):
         directories = [directories]
 
-    paths = [pathlib.Path(d) for d in directories]
-    assert all([p.is_dir() for p in paths])
+    for filelist in filelists:
+        assert all([p.is_file() for p in fileslist])
 
     if additional_options is not None:
         additional_options = ["=".join([k, v]) for k, v in additional_options.items()]
 
-    # original_dir = os.getcwd()
-    for path in paths:
-        job_files = sorted(list(path.glob("*.sh")))
-        if additional_options is not None:
-            cmd = (
-                [
+    assert len(nodes) == len(filelists)
+
+    for node, filelist in zip(nodes, filelists):
+        # we need `n_jobs_per_node` dependency trains per node
+        trains = np.array_split(filelist, jobs_per_node)
+        for job_files in trains:
+            if additional_options is not None:
+                cmd = (
+                    [
+                        "sbatch",
+                        "-J",
+                        job_files[0].resolve().stem,
+                        "-o",
+                        str(job_files[0].parents[0])
+                        + "/"
+                        + job_files[0].resolve().stem
+                        + ".out",
+                        "-w",
+                        node,
+                    ]
+                    + additional_options
+                    + [str(job_files[0].resolve())]
+                )
+            else:
+                cmd = [
                     "sbatch",
                     "-J",
                     job_files[0].resolve().stem,
@@ -379,40 +406,39 @@ def train_submitter(
                     + ".out",
                     "-w",
                     node,
+                    str(job_files[0].resolve()),
                 ]
-                + additional_options
-                + [str(job_files[0].resolve())]
-            )
-        else:
-            cmd = [
-                "sbatch",
-                "-J",
-                job_files[0].resolve().stem,
-                "-o",
-                str(job_files[0].parents[0])
-                + "/"
-                + job_files[0].resolve().stem
-                + ".out",
-                "-w",
-                node,
-                str(job_files[0].resolve()),
-            ]
-        if verbose:
-            print(
-                f"Submitting job [{job_files[0].resolve().stem}] on node [{node}]: {' '.join(cmd)}"
-            )
-        res = subprocess.run(cmd, capture_output=True)
-        if len(res.stderr) > 0:
-            print(res.stderr)
-            if stop_on_stderr:
-                exit()
-        res = res.stdout.decode().split()[-1]
-        prev_job = job_files[0].resolve().stem
-        time.sleep(wait)
-        for idx, job in enumerate(job_files[1:]):
-            if additional_options is not None:
-                cmd = (
-                    [
+            if verbose:
+                print(
+                    f"Submitting job [{job_files[0].resolve().stem}] on node [{node}]: {' '.join(cmd)}"
+                )
+            check_until_free(userid, max_num)
+            res = subprocess.run(cmd, capture_output=True)
+            if len(res.stderr) > 0:
+                print(res.stderr)
+                if stop_on_stderr:
+                    exit()
+            res = res.stdout.decode().split()[-1]
+            prev_job = job_files[0].resolve().stem
+            time.sleep(wait)
+            for idx, job in enumerate(job_files[1:]):
+                if additional_options is not None:
+                    cmd = (
+                        [
+                            "sbatch",
+                            "-J",
+                            job.resolve().stem,
+                            "-o",
+                            str(job.parents[0]) + "/" + job.resolve().stem + ".out",
+                            "-w",
+                            node,
+                            f"--dependency={dependency_type}:{res}",
+                        ]
+                        + additional_options
+                        + [str(job.resolve())]
+                    )
+                else:
+                    cmd = [
                         "sbatch",
                         "-J",
                         job.resolve().stem,
@@ -421,48 +447,32 @@ def train_submitter(
                         "-w",
                         node,
                         f"--dependency={dependency_type}:{res}",
+                        str(job.resolve()),
                     ]
-                    + additional_options
-                    + [str(job.resolve())]
+                if verbose:
+                    print(
+                        f"Submitting job [{job.resolve().stem}] on node [{node}], depending on job [{prev_job}]: {' '.join(cmd)}"
+                    )
+
+                check_until_free(userid, max_num)
+                res = subprocess.run(
+                    cmd,
+                    capture_output=True,
                 )
-            else:
-                cmd = [
-                    "sbatch",
-                    "-J",
-                    job.resolve().stem,
-                    "-o",
-                    str(job.parents[0]) + "/" + job.resolve().stem + ".out",
-                    "-w",
-                    node,
-                    f"--dependency={dependency_type}:{res}",
-                    str(job.resolve()),
-                ]
-            if verbose:
-                print(
-                    f"Submitting job [{job.resolve().stem}] on node [{node}], depending on job [{prev_job}]: {' '.join(cmd)}"
-                )
-
-            res = subprocess.run(
-                cmd,
-                capture_output=True,
-            )
-            if len(res.stderr) > 0:
-                print(res.stderr)
-                if stop_on_stderr:
-                    exit()
-            res = res.stdout.decode().split()[-1]
-            prev_job = job.resolve().stem
-            time.sleep(wait)
-        # os.chdir(original_dir)
-
-
-def train_submitter_wrapper(input_dict):
-    """Wrapper function for multiprocessing"""
-    train_submitter(**input_dict)
+                if len(res.stderr) > 0:
+                    print(res.stderr)
+                    if stop_on_stderr:
+                        exit()
+                res = res.stdout.decode().split()[-1]
+                prev_job = job.resolve().stem
+                time.sleep(wait)
 
 
 def partition_dirs(
-    nodelist: List[str], dirlist: List[str], dirs_per_node: int
+    nodelist: List[str],
+    dirlist: List[str],
+    dirs_per_node: int,
+    expand_dirs: bool = False,
 ) -> List[Tuple[str, List[str]]]:
     """
     Assigns sets of directories to nodes for dependency trains, depending on
@@ -477,6 +487,8 @@ def partition_dirs(
         `List[str]` of directories
     dirs_per_node:
         `int` specifying the maximum number of directories assigned to a node
+    expand_dirs:
+        if `True`, a single filelist will be returned instead of a list of directories
 
     Returns
     -------
@@ -490,7 +502,8 @@ def partition_dirs(
                 ...
             ]
 
-        This output is meant to be passed to `train_submitter`
+        This output is meant to be passed to `train_submitter`. If `expand_dirs` is `True`,
+        each node will be returned with a single list of all files across the directories
     """
     assignments = []
     num_groups = math.ceil(len(dirlist) / dirs_per_node)
@@ -504,6 +517,13 @@ def partition_dirs(
         dirs = dirlist[group * dirs_per_node : (group + 1) * dirs_per_node]
         assignments.append(tuple([node, dirs]))
 
+    if expand_dirs:
+        for idx, a in enumerate(assignments):
+            node, dirs = a
+            filelist = []
+            for d in dirs:
+                filelist.append(sorted(list(pathlib.Path(d).glob(".sh"))))
+            assignments[idx] = tuple([node, filelist])
     return assignments
 
 
@@ -520,6 +540,8 @@ def main():
     final_dirs = parse_objlist(
         opts.dirlist, assert_base_name_same=False, assert_fixed_len=False
     )
+    userid = subprocess.run(["whoami"], capture_output=True)
+    userid = userid.stdout.decode().strip()
 
     if opts.additional_options is not None:
         additional_options = {}
@@ -539,26 +561,28 @@ def main():
         additional_options = None
 
     if opts.nodelist != None:
-        assignments = partition_dirs(final_nodes, final_dirs, opts.dirs_per_node)
-        inputs = []
+        assignments = partition_dirs(
+            final_nodes, final_dirs, opts.dirs_per_node, expand_dirs=True
+        )
+        nodes = []
+        filelists = []
         for a in assignments:
-            inputs.append(
-                {
-                    "node": a[0],
-                    "directories": a[1],
-                    "dependency_type": opts.dependency_type,
-                    "wait": opts.wait,
-                    "stop_on_stderr": opts.stop_on_stderr,
-                    "verbose": opts.verbose,
-                    "additional_options": additional_options,
-                }
-            )
-        for i in inputs:
-            train_submitter(**i)
+            nodes.append(a[0])
+            filelists.append(a[1])
 
+        train_submitter(
+            userid=userid,
+            nodes=nodes,
+            filelists=filelists,
+            dependency_type=opts.dependency_type,
+            wait=opts.wait,
+            stop_on_stderr=opts.stop_on_stderr,
+            verbose=opts.verbose,
+            additional_options=additional_options,
+            jobs_per_node=opts.jobs_per_node,
+            max_num=opts.max_num_jobs,
+        )
     else:
-        userid = subprocess.run(["whoami"], capture_output=True)
-        userid = userid.stdout.decode().strip()
         partition_submitter(
             userid=userid,
             directories=final_dirs,
