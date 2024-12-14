@@ -327,7 +327,7 @@ def train_submitter(
     stop_on_stderr: bool = False,
     verbose: bool = False,
     additional_options: Optional[Dict] = None,
-    n_jobs_per_node: int = 3,
+    jobs_per_node: int = 3,
     max_num: int = 999,
 ):
     """
