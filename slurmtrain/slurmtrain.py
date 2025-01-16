@@ -74,7 +74,7 @@ def parse_input():
         type=int,
         default=1,
     )
-    parser.debug(
+    parser.add_argument(
         "--debug",
         help="If specified, the list of final nodes will be printed",
         action="store_true",
