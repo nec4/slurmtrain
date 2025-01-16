@@ -74,7 +74,12 @@ def parse_input():
         type=int,
         default=1,
     )
-
+    parser.debug(
+        "--debug",
+        help="If specified, the list of final nodes will be printed",
+        action="store_true",
+        default=1,
+    )
     return parser
 
 
@@ -364,6 +369,12 @@ def main():
         additional_options = None
 
     nodes, filelists = equipartition_files(final_nodes, final_dirs)
+    if opts.debug:
+        print("===========")
+        print("Final Nodes")
+        print("===========")
+        for n in nodes:
+            print(c)
     train_submitter(
         userid=userid,
         nodes=nodes,
