@@ -373,7 +373,7 @@ def main():
         print("===========")
         print("Final Nodes")
         print("===========")
-        for n in nodes:
+        for n in sorted(nodes):
             print(n)
     train_submitter(
         userid=userid,
