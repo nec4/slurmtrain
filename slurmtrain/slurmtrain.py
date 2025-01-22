@@ -7,6 +7,7 @@ from typing import List, Tuple, Union, Optional, Dict
 import math
 import multiprocessing
 import os
+import re
 
 
 def parse_input():
@@ -84,7 +85,7 @@ def parse_objlist(
     """
     Turns a single string objlist option into a full expanded list of tokenized objs. E.g.)
 
-    `"bgn001,bgn002-bgn04"` returns `["bgn001", "bgn002", "bgn003", bgn"004"]`
+    `"bgn001,bgn002-bgn04"` returns `["bgn001", "bgn002", "bgn003", "bgn004"]`
 
     Parameters
     ----------
@@ -314,6 +315,196 @@ def train_submitter(
                     time.sleep(wait)
 
 
+def scan_reservation_open_nodes(
+    userid: str, jobs_per_node: int, reservation: str
+) -> str:
+    """
+    Helper fuction for scanning a set of nodes of a reservation, and conditionally
+    dumping more jobs to them based on which nodes have room. Currently, this function
+    assumes that `uid` is the only one with access to the reservation.
+
+    Parameters
+    ----------
+    userid:
+        `str` of the user ID
+    jobs_per_node:
+        `int` restricting how many jobs can exist in a node simultaneously
+    reservation:
+        `str`: specifying the reservation (mandatory)
+
+
+    Returns
+    -------
+    found_node:
+        `Union[str, NoneType]` representing either the first, greedily found free node as a `str`,
+        or `None` if there are no free nodes available
+    """
+
+    used_nodes = {}  # nodes being used currently by jobs
+    all_nodes = {}  # all nodes from the reservation
+
+    squeue_output = subprocess.run(["squeue", "-u", userid], capture_output=True)
+    try:
+        jobs = squeue_output.stdout.decode("utf8").split("\n")[1:]  # skip SQUEUE header
+    except:
+        jobs = []
+
+    scontrol_output = subprocess.run(
+        ["scontrol", "show", "reservations"], capture_output=True
+    )
+    scontrol_output = scontrol_output.stdout.decode("utf8").split("\n")
+    for idx, line in enumerate(scontrol_output):
+        if line.startswith("ReservationName="):
+            tokens = line.split()
+            res_name = tokens[0].split("=")[-1]
+            if res_name == reservation:
+                nodelist = lines[idx + 1].split()[0]
+                nodelist = nodelist.split("=")[-1]
+                prefix = re.sub("[^a-zA-Z]+", "", nodelist)  # grab only alphas
+                nodelist = re.sub("[^0-9,-]+", "", nodelist)  # grab internal nodelist
+                nodes = nodelist.split(",")
+                nodes = parse_objlist(nodes)
+                for node in nodes:
+                    all_nodes.append(prefix + node)
+
+    if len(jobs > 1):
+        for job in jobs:
+            node = job.split()[-1]
+            if node not in list(used_nodes.keys()):
+                used_nodes[node] = 1
+            else:
+                used_nodes[node] = used_nodes[node] + 1
+
+    # case zero, no running jobs
+    if len(used_nodes) == 0:
+        return all_nodes[0]
+
+    # case one, we have a free node
+    for node, num_jobs in used_nodes.items():
+        if num_jobs < jobs_per_node:
+            return node
+
+    # case two, we need a new node:
+    for node in all_nodes:
+        if node not in used_nodes.keys():
+            return node
+
+    # Else, return None to trigger a short wait
+    return None
+
+
+def greedy_reservation_submitter(
+    userid: str,
+    filelists: List[pathlib.Path],
+    reservation: str,
+    wait=3,
+    stop_on_stderr: bool = False,
+    verbose: bool = False,
+    additional_options: Optional[Dict] = None,
+    jobs_per_node: int = 3,
+    max_num: int = 999,
+):
+    """
+    Greedily submits jobs to first available node. Useful for reservations
+    with non-static nodelists. The function will run continuously rather than
+    waiting for dependencies.
+
+    Parameters
+    ----------
+    userid:
+        `str` of the user ID
+    filelists:
+        `Union[pathlib.Path]` of job files to submit
+    reservation:
+        `str`: specifying the reservation (mandatory)
+    wait:
+        `int` specifying the time to sleep (in seconds) between each greedy node search
+    stop_on_stderr:
+        If `True`, the train is program is stopped and exits on ANY nonzero `stderr` from
+        `subprocess` calls
+    verbose:
+        If `True`, submission information is logged to stdout
+    additional_options:
+        Additional (flagged) SLURM submission options (e.g., `{"--reservation": "my_reservation"}`). These
+        will be passed to the `sbatch` call as `"=".join(key,value)`. These options
+        apply to all jobs in the dependency train.
+    jobs_per_node:
+        `int` restricting how many jobs can exist in a node simultaneously
+    max_num:
+        `int` maximum number of running/pending jobs
+    """
+    if additional_options is not None:
+        if "--reservation" in additional_options.keys():
+            assert additional_options["--reservation"] == reservation
+            del additional_options["--reservation"]
+
+    assert wait >= 0
+
+    for filelist in filelists:
+        assert all([p.is_file() for p in filelist])
+
+    if additional_options is not None:
+        additional_options = ["=".join([k, v]) for k, v in additional_options.items()]
+
+    for filelist in filelists:
+        for file in filelist:
+            if len(job_files) == 0:
+                continue
+            # greedily grab a node or otherwise wait
+            node = None
+            while node is None:
+                node = scan_reservation_open_nodes(
+                    uid=uid, jobs_per_node=jobs_per_node, reservation=reservation
+                )
+                sleep(wait)
+
+            if additional_options is not None:
+                cmd = (
+                    [
+                        "sbatch",
+                        "-J",
+                        job_files[0].resolve().stem,
+                        "-o",
+                        str(job_files[0].parents[0])
+                        + "/"
+                        + job_files[0].resolve().stem
+                        + ".out",
+                        "-w",
+                        node,
+                        "--reservation",
+                        reservation,
+                    ]
+                    + additional_options
+                    + [str(job_files[0].resolve())]
+                )
+            else:
+                cmd = [
+                    "sbatch",
+                    "-J",
+                    job_files[0].resolve().stem,
+                    "-o",
+                    str(job_files[0].parents[0])
+                    + "/"
+                    + job_files[0].resolve().stem
+                    + ".out",
+                    "-w",
+                    node,
+                    "--reservation",
+                    reservation,
+                    str(job_files[0].resolve()),
+                ]
+            if verbose:
+                print(
+                    f"Submitting job [{job_files[0].resolve()}] on node [{node}]: {' '.join(cmd)}"
+                )
+            check_until_free(userid, max_num)
+            res = subprocess.run(cmd, capture_output=True)
+            if len(res.stderr) > 0:
+                print(res.stderr)
+                if stop_on_stderr:
+                    exit()
+
+
 def equipartition_files(nodelist: List[str], dirlist: List[str]):
     """Equally scatters all SBATCH submission files found in every dir in dirlist
     over the provided nodelist
@@ -338,8 +529,6 @@ def main():
         print("Running with options:")
         print(opts)
 
-    if opts.nodelist is not None:
-        final_nodes = parse_objlist(opts.nodelist)
     final_dirs = parse_objlist(
         opts.dirlist, assert_base_name_same=False, assert_fixed_len=False
     )
@@ -363,19 +552,35 @@ def main():
     else:
         additional_options = None
 
-    nodes, filelists = equipartition_files(final_nodes, final_dirs)
-    train_submitter(
-        userid=userid,
-        nodes=nodes,
-        filelists=filelists,
-        dependency_type=opts.dependency_type,
-        wait=opts.wait,
-        stop_on_stderr=opts.stop_on_stderr,
-        verbose=opts.verbose,
-        additional_options=additional_options,
-        jobs_per_node=opts.jobs_per_node,
-        max_num=opts.max_num_jobs,
-    )
+    if opts.nodelist is not None:
+        final_nodes = parse_objlist(opts.nodelist)
+        nodes, filelists = equipartition_files(final_nodes, final_dirs)
+        train_submitter(
+            userid=userid,
+            nodes=nodes,
+            filelists=filelists,
+            dependency_type=opts.dependency_type,
+            wait=opts.wait,
+            stop_on_stderr=opts.stop_on_stderr,
+            verbose=opts.verbose,
+            additional_options=additional_options,
+            jobs_per_node=opts.jobs_per_node,
+            max_num=opts.max_num_jobs,
+        )
+
+    if opts.nodelist is None:
+        greedy_submitter(
+            userid=userid,
+            nodes=nodes,
+            filelists=filelists,
+            dependency_type=opts.dependency_type,
+            wait=opts.wait,
+            stop_on_stderr=opts.stop_on_stderr,
+            verbose=opts.verbose,
+            additional_options=additional_options,
+            jobs_per_node=opts.jobs_per_node,
+            max_num=opts.max_num_jobs,
+        )
 
 
 if __name__ == "__main__":
