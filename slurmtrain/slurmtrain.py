@@ -26,6 +26,7 @@ def parse_input():
     parser.add_argument(
         "--nodelist",
         type=str,
+        default=None,
         help="node range or list of the form `x1, x1`, `x1-x10` or a mixture, i,e, `x1,x2-x10`. Assumes that node names are of the form `^[a-zA-Z]` + `[0-9]$` (some alphas and then a numeric ending). All nodes must share the same basename.",
     )
     parser.add_argument(
@@ -51,6 +52,14 @@ def parse_input():
         help="additional options of the form `flag1,opt1,flag2,opt2,...` for SLURM",
         default=None,
     )
+
+    parser.add_arguments(
+        "--reservation",
+        type=str,
+        help="If no --nodelist is specified, then a reservation must be specified for greedy job submission (Yes, even if that reservation is already specified in the jobscript)",
+        default=None,
+    )
+
     parser.add_argument(
         "--stop-on-stderr",
         help="If set, the train submitter program will exit on ANY nonzero `stderr` from a `subprocess` call",
@@ -574,11 +583,14 @@ def main():
         )
 
     if opts.nodelist is None:
+        if opts.reservation is None:
+            raise RuntimeError(
+                "With --nodelist unspecified, a reservation must be specified via --reservation (yes, even if that information is already in the jobscripts)"
+            )
         greedy_submitter(
             userid=userid,
-            nodes=nodes,
             filelists=filelists,
-            dependency_type=opts.dependency_type,
+            reservation=opts.reservation,
             wait=opts.wait,
             stop_on_stderr=opts.stop_on_stderr,
             verbose=opts.verbose,
